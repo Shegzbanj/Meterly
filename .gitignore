@@ -1,0 +1,14 @@
+# Private configuration
+config/database.php
+
+# Environment secrets
+.env
+.env.*
+
+# Dependencies
+vendor/
+node_modules/
+
+# Temporary files
+*.log
+*.tmp

@@ -1,0 +1,38 @@
+METERLY CORRECTED PACKAGE - CHANGE SUMMARY
+=========================================
+
+Corrections made
+----------------
+1. Added auth/session.php to restore the signed-in user from the PHP session after a page refresh.
+2. Added auth/logout.php to destroy the server-side session and expire the session cookie.
+3. Updated auth/bootstrap.php so the session cookie path follows the actual project folder instead of being fixed to /meterly/.
+4. Added auth/admin_activity.php with persistent activity storage in the new admin_activity table.
+5. Added auth/admin_consumption.php for administrator create, update and delete operations on consumption_records.
+6. Added auth/admin_reminders.php for administrator create, update and delete operations on reminders.
+7. Updated send_bill_reminders.php to support authenticated customer requests for that customer's own due bills, while retaining CLI use for scheduled processing of all customers.
+8. Made Paystack callback and password-reset URLs use the current host and project folder.
+9. Allowed configured Paystack test or live secret-key formats; secrets remain outside the web root.
+10. Updated administrator data loading to mark unpaid bills with past due dates as overdue without changing paid bills.
+11. Updated administrator CSV exports to export actual MySQL payment and utility-account records.
+12. Hid the automatic sample-data loader and clarified which provider-related experiences remain demonstration-only.
+13. Added a bundled SQL database export and an idempotent database migration for the activity log.
+14. Removed old backup copies and diagnostic test scripts from this distributable ZIP. The original uploaded ZIP was not changed.
+
+Validation performed
+--------------------
+- PHP syntax check: all 23 application PHP files passed.
+- JavaScript syntax check: the inline script in index.html passed Node.js syntax validation.
+- Local endpoint scan: all 19 referenced local PHP endpoints exist.
+- ZIP integrity check is performed when the package is built.
+
+Runtime validation limitation
+-----------------------------
+This build environment does not have the PHP pdo_mysql or curl extensions and does not have a MySQL/MariaDB server installed. Therefore a live database login, CRUD, SMTP delivery and Paystack transaction could not be executed here. These must be tested in the user's XAMPP installation after enabling pdo_mysql and curl and importing the database.
+
+Features that still require external provider integration
+----------------------------------------------------------
+- Internet/data bundle checkout remains a clearly labelled demonstration; no mobile network vending API is connected.
+- Live meter readings, automatic meter/account validation and electricity vending are not connected to utility providers.
+- Paystack can confirm a payment into Meterly when valid credentials are configured, but that confirmation does not itself vend electricity units or settle the utility provider account.
+- Email reminders require the private SMTP configuration file. Background reminders require Windows Task Scheduler or another server scheduler.
+- Browser notifications require browser permission and the page to remain open.
