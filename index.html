@@ -1389,8 +1389,8 @@
                 <div class="summary-card"><span class="summary-label">Total registered users</span><strong class="summary-value" id="admin-customer-count">0</strong></div>
                 <div class="summary-card"><span class="summary-label">Total utility accounts</span><strong class="summary-value" id="admin-account-count">0</strong></div>
                 <div class="summary-card"><span class="summary-label">Total bills tracked</span><strong class="summary-value" id="admin-bill-count">0</strong></div>
-                <div class="summary-card"><span class="summary-label">Total simulated transactions</span><strong class="summary-value" id="admin-payment-count">0</strong></div>
-                <div class="summary-card"><span class="summary-label">Simulated payment volume</span><strong class="summary-value" id="admin-payment-volume">₦0</strong></div>
+                <div class="summary-card"><span class="summary-label">Payment records</span><strong class="summary-value" id="admin-payment-count">0</strong></div>
+                <div class="summary-card"><span class="summary-label">Successful payment value</span><strong class="summary-value" id="admin-payment-volume">₦0</strong></div>
               </div>
               <div class="admin-panel">
                 <h4>Recent activity</h4>
@@ -3505,15 +3505,28 @@
     }
 
     function renderAdminDashboard() {
+      // Keep the legacy prototype account table isolated from the live MySQL metrics.
+      // The original renderer relied on a function-local variable that was lost when
+      // the live-database overview update was merged, causing a ReferenceError.
       const utilityCards = [...utilityList.querySelectorAll(".utility-card")];
+      const live = meterlyDatabaseData;
       document.getElementById("admin-display-heading").textContent =
         `${adminSettings.displayName} · Platform overview`;
-      document.getElementById("admin-customer-count").textContent = String(adminUsers.length);
-      document.getElementById("admin-account-count").textContent = String(utilityCards.length);
-      document.getElementById("admin-bill-count").textContent = String(utilityCards.length);
-      document.getElementById("admin-payment-count").textContent = String(adminPayments.length);
-      document.getElementById("admin-payment-volume").textContent =
-        formatAdminCurrency(adminPayments.reduce((total, payment) => total + payment.amount, 0));
+      // Overview metrics must come from the same MySQL dataset shown in Live database.
+      // Do not mix the old prototype/demo arrays with production database counts.
+      document.getElementById("admin-customer-count").textContent = live ? String(live.users.length) : "Loading…";
+      document.getElementById("admin-account-count").textContent = live ? String(live.utility_accounts.length) : "Loading…";
+      document.getElementById("admin-bill-count").textContent = live ? String(live.bills.length) : "Loading…";
+      document.getElementById("admin-payment-count").textContent = live ? String(live.payments.length) : "Loading…";
+      const successfulPaymentValue = live
+        ? live.payments.reduce((total, payment) => {
+            const status = String(payment.payment_status || "").toLowerCase();
+            return ["successful", "success"].includes(status) ? total + Number(payment.amount || 0) : total;
+          }, 0)
+        : null;
+      document.getElementById("admin-payment-volume").textContent = live
+        ? formatAdminCurrency(successfulPaymentValue)
+        : "Loading…";
 
       const customersBody = document.getElementById("admin-customers");
       customersBody.replaceChildren();
@@ -3735,8 +3748,13 @@
     }
 
     function downloadAdminCsv(filename, headers, rows) {
-      const escapeCsv = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
-      const contents = [headers, ...rows].map((row) => row.map(escapeCsv).join(",")).join("\r\n");
+      const escapeCsv = (value) => {
+        let text = String(value ?? "");
+        // Neutralise spreadsheet formula prefixes in exported user/database text.
+        if (/^[\s]*[=+@\-]/.test(text)) text = `'${text}`;
+        return `"${text.replaceAll('"', '""')}"`;
+      };
+      const contents = "\uFEFF" + [headers, ...rows].map((row) => row.map(escapeCsv).join(",")).join("\r\n");
       const url = URL.createObjectURL(new Blob([contents], { type: "text/csv;charset=utf-8" }));
       const link = document.createElement("a");
       link.href = url;
@@ -3904,8 +3922,13 @@
         if (!response.ok || !result.ok) throw new Error(result.message || "Could not load database records.");
         meterlyDatabaseData = result.data;
         renderLiveDatabase();
+        renderAdminDashboard();
       } catch (error) {
         status.textContent = error.message;
+        ["admin-customer-count", "admin-account-count", "admin-bill-count", "admin-payment-count", "admin-payment-volume"].forEach((id) => {
+          const metric = document.getElementById(id);
+          if (metric) metric.textContent = "Unavailable";
+        });
       }
     }
 
@@ -4170,8 +4193,8 @@ await loadPersistentAdminActivity();
           panel.hidden = panel.dataset.adminPanel !== button.dataset.adminSection;
         });
         renderAdminDashboard();
-        if (button.dataset.adminSection === "activity") loadPersistentAdminActivity();
-        if (["database", "bill-management", "payments", "reminders", "consumption"].includes(button.dataset.adminSection)) loadLiveDatabase();
+        if (["overview", "activity"].includes(button.dataset.adminSection)) loadPersistentAdminActivity();
+        if (["overview", "database", "bill-management", "payments", "reminders", "consumption"].includes(button.dataset.adminSection)) loadLiveDatabase();
       });
     });
 
@@ -4356,7 +4379,7 @@ await loadPersistentAdminActivity();
         ["Customer", "Email", "Type", "Provider", "Account number", "Created"],
         accounts.map((account) => [
           account.customer_name, account.customer_email, account.utility_type,
-          account.provider_name, account.account_number, account.created_at
+          account.provider_name, `\t${String(account.account_number ?? "")}`, account.created_at
         ]));
       document.getElementById("admin-export-status").textContent = `Database utility-account CSV export started (${accounts.length} records).`;
       recordAdminActivity("Database utility account report exported", `${accounts.length} account records`);
