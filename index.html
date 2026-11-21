@@ -1764,6 +1764,7 @@
     let activeUserEmail = "";
     let activeUserRole = "";
     let databaseCustomerPayments = [];
+    let customerReminderPreferences = new Map();
     let pendingElectricityPayment = null;
     let activeReceipt = null;
     let reminderMessagesShown = 0;
@@ -2165,6 +2166,27 @@
         });
         const billsResult = await billsResponse.json().catch(() => ({}));
         if (!billsResponse.ok || !billsResult.ok) throw new Error(billsResult.message || "Could not load your bill and payment details.");
+
+const preferencesResponse = await fetch("auth/customer_reminder_preferences.php", {
+  method: "GET",
+  credentials: "same-origin",
+  cache: "no-store",
+  headers: { "Accept": "application/json" }
+});
+
+const preferencesResult = await preferencesResponse.json().catch(() => ({}));
+
+if (!preferencesResponse.ok || !preferencesResult.ok) {
+  throw new Error(preferencesResult.message || "Could not load reminder preferences.");
+}
+
+customerReminderPreferences = new Map(
+          (preferencesResult.preferences || []).map(item => [
+            String(item.bill_id),
+            Number(item.enabled)
+          ])
+        );
+
         const paymentsResponse = await fetch("auth/customer_payments.php", {
           method: "GET", credentials: "same-origin", cache: "no-store",
           headers: { "Accept": "application/json" }
@@ -2589,6 +2611,27 @@
       return nextDueDate;
     }
 
+    async function saveCustomerBillReminderPreference(billId, enabled) {
+      const response = await fetch("auth/customer_reminder_preferences.php", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        body: JSON.stringify({
+          bill_id: Number(billId),
+          enabled: Boolean(enabled)
+        })
+      });
+
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) {
+        throw new Error(result.message || "Could not save reminder preference.");
+      }
+      return result;
+    }
+
     function renderUtility(data) {
       const card = document.createElement("article");
       card.className = "utility-card";
@@ -2705,14 +2748,38 @@
       const reminder = document.createElement("button");
       reminder.className = "utility-action";
       reminder.type = "button";
-      reminder.setAttribute("aria-pressed", "true");
-      reminder.textContent = "Reminder on";
-      reminder.addEventListener("click", () => {
-        const enabled = reminder.getAttribute("aria-pressed") !== "true";
-        reminder.setAttribute("aria-pressed", String(enabled));
-        reminder.textContent = enabled ? "Reminder on" : "Reminder off";
-        reminderLine.hidden = !enabled;
-        renderCustomerFeatures();
+
+      const billId = data.databaseBillId ? String(data.databaseBillId) : "";
+      let reminderEnabled = billId
+        ? customerReminderPreferences.get(billId) !== 0
+        : false;
+
+      function updateReminderButton() {
+        reminder.setAttribute("aria-pressed", String(reminderEnabled));
+        reminder.textContent = reminderEnabled ? "Reminder on" : "Reminder off";
+        reminderLine.hidden = !reminderEnabled;
+      }
+
+      reminder.disabled = !billId;
+      updateReminderButton();
+
+      reminder.addEventListener("click", async () => {
+        if (!billId || reminder.disabled) return;
+
+        const newValue = !reminderEnabled;
+        reminder.disabled = true;
+
+        try {
+          await saveCustomerBillReminderPreference(billId, newValue);
+          reminderEnabled = newValue;
+          customerReminderPreferences.set(billId, Number(newValue));
+          updateReminderButton();
+          renderCustomerFeatures();
+        } catch (error) {
+          window.alert(error.message);
+        } finally {
+          reminder.disabled = false;
+        }
       });
 
       actions.append(pay, reminder);
@@ -2744,26 +2811,50 @@
       if (!utilityCards.length && utilityFormWrap.hidden) showUtilityFormButton.click();
     });
 
-    document.getElementById("toggle-all-reminders").addEventListener("click", () => {
+    document.getElementById("toggle-all-reminders").addEventListener("click", async (event) => {
+      const masterButton = event.currentTarget;
       const cards = [...utilityList.querySelectorAll(".utility-card")];
       const internetPayments = adminPayments.filter((payment) => payment.type === "Internet data");
+      const reminderButtons = cards
+        .map((card) => ({
+          card,
+          button: card.querySelector(".utility-actions .utility-action[aria-pressed]"),
+          billId: card.dataset.billId
+        }))
+        .filter((item) => item.button && item.billId);
+
       const reminderTargets = [
-        ...cards.map((card) => card.querySelector(".utility-actions .utility-action[aria-pressed]").getAttribute("aria-pressed") === "true"),
+        ...reminderButtons.map((item) => item.button.getAttribute("aria-pressed") === "true"),
         ...internetPayments.map((payment) => payment.reminderEnabled !== false)
       ];
       const allEnabled = reminderTargets.length > 0 && reminderTargets.every(Boolean);
       const enabled = !allEnabled;
-      cards.forEach((card) => {
-        const toggle = card.querySelector(".utility-actions .utility-action[aria-pressed]");
-        toggle.setAttribute("aria-pressed", String(enabled));
-        toggle.textContent = enabled ? "Reminder on" : "Reminder off";
-        card.querySelector(".utility-reminder").hidden = !enabled;
-      });
-      internetPayments.forEach((payment) => {
-        payment.reminderEnabled = enabled;
-      });
-      recordAdminActivity("Payment reminders updated", allEnabled ? "All reminders turned off" : "All reminders turned on");
-      renderCustomerFeatures();
+
+      masterButton.disabled = true;
+      try {
+        // Save each database bill preference before changing the dashboard controls.
+        for (const item of reminderButtons) {
+          await saveCustomerBillReminderPreference(item.billId, enabled);
+        }
+
+        reminderButtons.forEach((item) => {
+          item.button.setAttribute("aria-pressed", String(enabled));
+          item.button.textContent = enabled ? "Reminder on" : "Reminder off";
+          item.card.querySelector(".utility-reminder").hidden = !enabled;
+          customerReminderPreferences.set(String(item.billId), Number(enabled));
+        });
+
+        internetPayments.forEach((payment) => {
+          payment.reminderEnabled = enabled;
+        });
+
+        recordAdminActivity("Payment reminders updated", allEnabled ? "All reminders turned off" : "All reminders turned on");
+        renderCustomerFeatures();
+      } catch (error) {
+        window.alert(error.message);
+      } finally {
+        masterButton.disabled = false;
+      }
     });
 
     document.getElementById("usage-budget-form").addEventListener("submit", (event) => {

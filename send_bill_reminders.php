@@ -22,16 +22,36 @@ try {
         if (empty($mailConfig[$key])) throw new RuntimeException('Missing Gmail configuration: ' . $key);
     }
 
-    $sql = "SELECT b.id AS bill_id, b.bill_title, b.amount, b.due_date,
-                   u.full_name, u.email, DATEDIFF(b.due_date, CURDATE()) AS days_remaining
+    $sql = "SELECT
+                b.id AS bill_id,
+                b.bill_title,
+                b.amount,
+                b.due_date,
+                u.full_name,
+                u.email,
+                DATEDIFF(b.due_date, CURDATE()) AS days_remaining
             FROM bills b
-            INNER JOIN utility_accounts ua ON ua.id = b.utility_account_id
-            INNER JOIN users u ON u.id = ua.user_id
-            WHERE b.status IN ('unpaid','overdue')
-              AND DATEDIFF(b.due_date, CURDATE()) IN (7,3,0)";
+            INNER JOIN utility_accounts ua
+                ON ua.id = b.utility_account_id
+            INNER JOIN users u
+                ON u.id = ua.user_id
+            LEFT JOIN bill_reminder_preferences brp
+                ON brp.bill_id = b.id
+                AND brp.user_id = ua.user_id
+            WHERE b.status IN ('unpaid', 'overdue')
+              AND DATEDIFF(b.due_date, CURDATE()) IN (7, 3, 0)
+              AND COALESCE(brp.enabled, 1) = 1";
+
     $params = [];
-    if (!$isCli) { $sql .= ' AND ua.user_id = ?'; $params[] = (int)$_SESSION['user_id']; }
-    $sql .= ' ORDER BY b.due_date ASC';
+
+    // Browser requests are restricted to the signed-in customer's own bills.
+    // CLI runs process all customers' bills, while still respecting preferences.
+    if (!$isCli) {
+        $sql .= " AND ua.user_id = ?";
+        $params[] = (int) $_SESSION['user_id'];
+    }
+
+    $sql .= " ORDER BY b.due_date ASC";
     $stmt = $pdo->prepare($sql); $stmt->execute($params); $bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     $sent = 0; $skipped = 0; $failed = 0;
